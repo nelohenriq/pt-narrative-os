@@ -1,0 +1,92 @@
+# pt-media-os V1 — Docker Compose (local development)
+# Last updated: 2026-04-25
+
+services:
+  # ============================================================================
+  # Postgres with pgvector extension
+  # ============================================================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ptmedia-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ptmedia
+      POSTGRES_PASSWORD: ptmedia
+      POSTGRES_DB: pt_media_os
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/migrations/001_initial.sql:/docker-entrypoint-initdb.d/001_initial.sql:ro
+      - ./db/seed/outlets.sql:/docker-entrypoint-initdb.d/002_seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ptmedia"]
+      interval: "5s"
+      timeout: "5s"
+      retries: 5
+
+  # ============================================================================
+  # Ollama (local AI — embeddings + fast extraction)
+  # ============================================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ptmedia-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollamadata:/root/.ollama
+    # Uncomment below if you have an NVIDIA GPU with nvidia-docker installed
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: "15s"
+      timeout: "10s"
+      retries: 10
+      start_period: "60s"
+
+  # ============================================================================
+  # Redis (optional — for job queue if needed beyond Postgres polling)
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: ptmedia-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: "5s"
+      timeout: "5s"
+      retries: 5
+
+  # ============================================================================
+  # Ollama model puller (one-shot — pulls required models on first run)
+  # ============================================================================
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: ptmedia-ollama-pull
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      bash -c "
+        echo 'Pulling nomic-embed-text...' &&
+        ollama pull nomic-embed-text &&
+        echo 'Pulling mistral...' &&
+        ollama pull mistral &&
+        echo 'Models ready.'
+      "
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+
+volumes:
+  pgdata:
+  ollamadata:
+  redisdata:

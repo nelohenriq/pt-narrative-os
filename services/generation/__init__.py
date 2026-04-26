@@ -1,0 +1,1 @@
+"""Generation services — AI summaries, framing comparisons, undercoverage cards."""

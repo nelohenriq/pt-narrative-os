@@ -1,0 +1,1 @@
+"""Article analysis services — entity, claim, and frame extraction."""

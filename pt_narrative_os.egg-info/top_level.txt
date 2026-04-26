@@ -1,0 +1,6 @@
+ai
+api
+db
+prompts
+review
+services
