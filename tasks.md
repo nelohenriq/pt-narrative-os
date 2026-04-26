@@ -128,7 +128,7 @@ Prioritized task list for coding agents and developers. Work top to bottom. Do n
 
 ## Phase 8 — Review UI
 
-- [ ] Implement review/app.py — FastAPI + HTMX
+- [x] Implement review/app.py — FastAPI + HTMX
   - HTTP Basic Auth using REVIEW_USERNAME and REVIEW_PASSWORD_HASH
   - List unreviewed events with scores
   - Event detail view with articles, scores, summaries
@@ -136,23 +136,23 @@ Prioritized task list for coding agents and developers. Work top to bottom. Do n
   - Reject: set status='reviewed_rejected', is_reviewed=TRUE, is_published=FALSE
   - Edit summary inline before publishing
   - Request re-generation: delete event_summaries, reset to 'unreviewed'
-- [ ] Write tests/test_review.py — auth test, approve/reject test
+- [x] Write tests/test_review.py — auth test, approve/reject test (16/16 pass)
 
 ---
 
 ## Phase 9 — API
 
-- [ ] Implement api/main.py — FastAPI app
-- [ ] GET /digest/today — today's daily_digest
-- [ ] GET /events — paginated published events list
-- [ ] GET /events/{id} — event detail with articles, scores, summaries, documents
-- [ ] GET /events/{id}/provenance — trace AI outputs back to ai_runs and source articles
-- [ ] GET /events/undercovered — published undercoverage flags
-- [ ] GET /outlets — list all active outlets
-- [ ] GET /outlets/{slug} — outlet profile with ownership and recent events
-- [ ] GET /search?q= — full-text search across events and articles
-- [ ] Query params for filtering: outlet, topic, date_from, date_to, claim_type
-- [ ] Write tests/test_api.py — endpoint integration tests
+- [x] Implement api/main.py — FastAPI app
+- [x] GET /digest/today — today's daily_digest
+- [x] GET /events — paginated published events list
+- [x] GET /events/{id} — event detail with articles, scores, summaries, documents
+- [x] GET /events/{id}/provenance — trace AI outputs back to ai_runs and source articles
+- [x] GET /events/undercovered — published undercoverage flags
+- [x] GET /outlets — list all active outlets
+- [x] GET /outlets/{slug} — outlet profile with ownership and recent events
+- [x] GET /search?q= — full-text search across events and articles
+- [x] Query params for filtering: outlet, topic, date_from, date_to, claim_type
+- [ ] Write tests/test_api.py — endpoint integration tests (need running API server)
 
 ---
 

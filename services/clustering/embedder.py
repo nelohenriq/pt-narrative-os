@@ -25,6 +25,27 @@ from ai.clients import get_client
 
 logger = logging.getLogger(__name__)
 
+_NOMIC_MAX_WORDS = 1000
+"""Maximum words to send to nomic-embed-text in one call.
+
+nomic-embed-text has an 8192-token context window, but with the
+"search_document: " prefix and Portuguese text (~0.75 words/token),
+we need to stay well under the limit. Articles exceeding this are
+truncated to the first N words (which carry the lede/summary signal).
+
+Future: chunk long articles and mean-pool the embeddings.
+"""
+
+
+def _truncate_text(text: str, max_words: int = _NOMIC_MAX_WORDS) -> str:
+    """Truncate text to max_words, preserving word boundaries."""
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    truncated = " ".join(words[:max_words])
+    logger.debug("Truncated article from %d to %d words", len(words), max_words)
+    return truncated
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Embedding helpers
 # ──────────────────────────────────────────────────────────────────────────────
@@ -252,7 +273,8 @@ async def embed_batch(
             summary["processed"] = len(articles)
 
             # Process in sub-batches for efficiency
-            texts = [a["cleaned_text"] for a in articles]
+            # Truncate long articles to stay within nomic-embed-text context window
+            texts = [_truncate_text(a["cleaned_text"]) for a in articles]
 
             try:
                 embeddings = await _generate_embeddings(client, texts)
