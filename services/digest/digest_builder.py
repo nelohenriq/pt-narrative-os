@@ -14,7 +14,7 @@ import json
 import logging
 from datetime import UTC, date, datetime, timedelta
 
-from db.pool import fetch_all, fetch_one, execute
+from db.pool import fetch_all, fetch_one
 
 logger = logging.getLogger(__name__)
 
@@ -60,23 +60,26 @@ async def build_daily_digest(target_date: date | None = None) -> str | None:
     event_ids = [str(e["id"]) for e in events]
     undercovered = []
     if event_ids:
-        # Build parameterized query with proper placeholders
         placeholders = ", ".join(f"${i+1}" for i in range(len(event_ids)))
         flags = await fetch_all(
-            f"""SELECT uf.event_id, uf.reason, uf.flag_type, uf.silent_outlets
+            f"""SELECT uf.event_id AS flag_event_id, uf.reason, uf.flag_type, uf.silent_outlets
                 FROM undercoverage_flags uf
-                JOIN events e ON uf.event_id = e.id
+                INNER JOIN events e ON uf.event_id = e.id
                 WHERE e.is_published = TRUE
                   AND uf.event_id IN ({placeholders})
                   AND uf.is_published = TRUE""",
             *event_ids,
         )
-        for flag in flags:
+        for flag_row in flags:
             undercovered.append({
-                "event_id": str(flag["event_id"]),
-                "reason": flag["reason"],
-                "flag_type": flag["flag_type"],
-                "silent_outlets": json.loads(flag["silent_outlets"]) if flag["silent_outlets"] else [],
+                "event_id": str(flag_row["flag_event_id"]),
+                "reason": flag_row["reason"],
+                "flag_type": flag_row["flag_type"],
+                "silent_outlets": (
+                    json.loads(flag_row["silent_outlets"])
+                    if flag_row["silent_outlets"]
+                    else []
+                ),
             })
 
     # Build metadata

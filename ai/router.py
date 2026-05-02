@@ -8,11 +8,11 @@ Task → model mapping (from CLAUDE.md):
     ================  ================================  ===============================
     Task              Primary                           Fallback
     ================  ================================  ===============================
-    embed             Ollama nomic-embed-text            NVIDIA NIM nv-embedqa-e5-v5
-    extractor_fast    Ollama mistral                    NVIDIA NIM llama-3.3-70b-instruct
-    framing_analyst   NVIDIA NIM mistral-small-4-119b   Groq llama-3.3-70b-versatile
-    summarize         NVIDIA NIM deepseek-r1            Groq llama-3.3-70b-versatile
-    fallback          OpenRouter llama-3.3-70b-instruct  —
+| embed Ollama nomic-embed-text:v1.5 NVIDIA NIM nv-embedqa-e5-v5
+| extractor_fast Ollama qwen2.5:7b-instruct NVIDIA NIM llama-3.3-70b-instruct
+| framing_analyst NVIDIA NIM mistral-small-4-119b Groq llama-3.3-70b-versatile
+| summarize NVIDIA NIM deepseek-r1 Groq llama-3.3-70b-versatile
+| fallback OpenRouter llama-3.3-70b-instruct —
     ================  ================================  ===============================
 """
 
@@ -44,11 +44,11 @@ TaskName = Literal["embed", "extractor_fast", "framing_analyst", "summarize", "f
 # The router tries them sequentially until one succeeds.
 _TASK_CONFIG: dict[TaskName, list[tuple[ProviderName, str]]] = {
     "embed": [
-        ("ollama", "nomic-embed-text"),
+        ("ollama", "nomic-embed-text:v1.5"),
         ("nvidia_nim", "nv-embedqa-e5-v5"),
     ],
     "extractor_fast": [
-        ("ollama", "mistral"),
+        ("ollama", "qwen2.5:7b-instruct"),
         ("nvidia_nim", "llama-3.3-70b-instruct"),
     ],
     "framing_analyst": [

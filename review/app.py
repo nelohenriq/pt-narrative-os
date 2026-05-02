@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 import asyncpg
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Depends, HTTPException, Form, Query
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
 load_dotenv()
 
@@ -77,6 +77,8 @@ async def execute(query: str, *args) -> None:
 
 def _check_auth(username: str, password: str) -> bool:
     """Verify HTTP Basic Auth credentials."""
+    import bcrypt
+    
     expected_user = os.getenv("REVIEW_USERNAME", "admin")
     expected_hash = os.getenv("REVIEW_PASSWORD_HASH", "")
 
@@ -86,6 +88,13 @@ def _check_auth(username: str, password: str) -> bool:
     # Allow plaintext "changeme" for dev
     if not expected_hash or expected_hash == "changeme":
         return password == "changeme"
+
+    # Try bcrypt first (starts with $2b$)
+    if expected_hash.startswith("$2b$") or expected_hash.startswith("$2a$"):
+        try:
+            return bcrypt.checkpw(password.encode(), expected_hash.encode())
+        except (ValueError, TypeError):
+            return False
 
     password_hash = hashlib.sha256(password.encode()).hexdigest()
     if expected_hash.startswith("sha256:"):
@@ -98,7 +107,18 @@ def _check_auth(username: str, password: str) -> bool:
 async def require_auth(request: Request) -> str:
     """FastAPI dependency for HTTP Basic Auth."""
     import base64
+    import os
 
+    # For Cloudspaces/Lightning, check if the request has Lightning headers
+    headers_str = str(request.headers).lower()
+    if "x-lightning" in headers_str:
+        # Allow access - user is already auth'd by Lightning Studio
+        return "cloudspaces-user"
+    
+    # Fallback: check if running in Lightning environment
+    if os.getenv("LIGHTNING_STUDIO", "") or os.getenv("CLOUDSPACES", ""):
+        return "cloudspaces-user"
+    
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Basic "):
         raise HTTPException(
@@ -135,6 +155,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="PT Media OS — Review UI", lifespan=lifespan)
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -177,6 +198,10 @@ def _render_base(title: str, body: str, username: str, extra_head: str = "") -> 
         .btn-reject {{ background: #dc2626; color: #fff; }}
         .btn-regen {{ background: #f59e0b; color: #fff; }}
         .btn-back {{ background: #6b7280; color: #fff; }}
+        .btn-edit {{ background: #0891b2; color: #fff; font-size: .8rem; padding: 4px 10px; }}
+        .edit-form {{ display: none; margin-top: .5rem; }}
+        .edit-form.show {{ display: block; }}
+        textarea {{ width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-family: inherit; font-size: .9rem; min-height: 120px; resize: vertical; }}
         input[type="text"] {{ padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 4px; font-size: .9rem; min-width: 280px; }}
         .meta {{ font-size: .85rem; color: #666; margin: .3rem 0; }}
         .scores {{ display: flex; gap: 1rem; flex-wrap: wrap; margin: .5rem 0; }}
@@ -188,6 +213,19 @@ def _render_base(title: str, body: str, username: str, extra_head: str = "") -> 
             .actions {{ flex-direction: column; }}
         }}
     </style>
+    <script>
+        function toggleEdit(type) {{
+            var display = document.getElementById('summary-display-' + type);
+            var form = document.getElementById('edit-form-' + type);
+            if (form.classList.contains('show')) {{
+                form.classList.remove('show');
+                display.style.display = '';
+            }} else {{
+                form.classList.add('show');
+                display.style.display = 'none';
+            }}
+        }}
+    </script>
 </head>
 <body>
 <span class="user-info">👤 {username}</span>
@@ -198,11 +236,12 @@ def _render_base(title: str, body: str, username: str, extra_head: str = "") -> 
 
 def _render_event_list(events: list[dict], username: str, list_type: str = "unreviewed") -> str:
     nav = """
-    <div class="nav">
-        <a href="/" class="{active_unreviewed}">📋 Unreviewed</a>
-        <a href="/published" class="{active_published}">✅ Published</a>
-        <a href="/rejected" class="{active_rejected}">❌ Rejected</a>
-    </div>"""
+ <div class="nav">
+ <a href="/" class="{active_unreviewed}">📋 Unreviewed</a>
+ <a href="/published" class="{active_published}">✅ Published</a>
+ <a href="/rejected" class="{active_rejected}">❌ Rejected</a>
+ <a href="/mission-control" style="background: #7c3aed; border-color: #7c3aed; color: #fff;">🚀 Mission Control</a>
+ </div>"""
     nav = nav.replace(
         "{active_unreviewed}", "active" if list_type == "unreviewed" else ""
     ).replace(
@@ -274,13 +313,29 @@ def _render_event_detail(
 
     # Summaries
     summary_cards = ""
-    for s in summaries:
+    for i, s in enumerate(summaries):
         cls = "card ucov" if s["summary_type"] == "undercoverage_card" else "card"
+        stype = s["summary_type"]
+        escaped_content = s["content"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
         summary_cards += f"""
-        <div class="{cls}">
-            <h4 style="text-transform:uppercase;letter-spacing:.04em;font-size:.75rem;color:#666">{s['summary_type']}</h4>
-            <p style="white-space:pre-wrap">{s['content']}</p>
-            <p class="meta">Model: {s.get('model_name','?')} | v{s.get('prompt_version','?')}</p>
+        <div class="{cls}" id="summary-{stype}">
+            <h4 style="text-transform:uppercase;letter-spacing:.04em;font-size:.75rem;color:#666;display:flex;justify-content:space-between;align-items:center">
+                {stype}
+                <button class="btn btn-edit" onclick="toggleEdit('{stype}')">✏️ Edit</button>
+            </h4>
+            <div id="summary-display-{stype}">
+                <p style="white-space:pre-wrap">{s['content']}</p>
+                <p class="meta">Model: {s.get('model_name','?')} | v{s.get('prompt_version','?')}</p>
+            </div>
+            <div class="edit-form" id="edit-form-{stype}">
+                <form method="POST" action="/events/{event['id']}/summaries/{stype}" onsubmit="return saveEdit('{stype}', this)">
+                    <textarea name="content" id="edit-content-{stype}">{escaped_content}</textarea>
+                    <div style="margin-top:.5rem;display:flex;gap:.5rem">
+                        <button type="submit" class="btn btn-approve">💾 Save</button>
+                        <button type="button" class="btn btn-back" onclick="toggleEdit('{stype}')">Cancel</button>
+                    </div>
+                </form>
+            </div>
         </div>"""
 
     # Articles
@@ -368,7 +423,27 @@ def _render_event_detail(
 
 <h2>Undercoverage Flags ({len(flags)})</h2>
 <table><tr><th>Type</th><th>Reason</th><th>Silent</th></tr>
-{flag_rows}</table>"""
+{flag_rows}</table>
+
+<script>
+async function saveEdit(type) {{
+    var textarea = document.getElementById('edit-content-' + type);
+    var content = textarea.value;
+    var resp = await fetch('/events/{event['id']}/summaries/' + type, {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},
+        body: 'content=' + encodeURIComponent(content)
+    }});
+    if (resp.ok) {{
+        var data = await resp.json();
+        document.getElementById('summary-display-' + type).querySelector('p').textContent = data.content;
+        toggleEdit(type);
+    }} else {{
+        alert('Failed to save: ' + resp.status);
+    }}
+    return false;
+}}
+</script>"""
 
     return _render_base("Review", body, username)
 
@@ -535,6 +610,41 @@ async def regenerate_event(
         event_id,
     )
     return RedirectResponse(f"/events/{event_id}", status_code=303)
+
+
+@app.post("/events/{event_id}/summaries/{summary_type}")
+async def update_summary(
+    event_id: str,
+    summary_type: str,
+    request: Request,
+    content: str = Form(...),
+    username: str = Depends(require_auth),
+):
+    # Validate summary_type against DB enum
+    valid_types = {"event_summary", "framing_comparison", "undercoverage_card"}
+    if summary_type not in valid_types:
+        raise HTTPException(400, f"Invalid summary_type: {summary_type}")
+
+    # Upsert: use ON CONFLICT with a COALESCE on ai_run_id
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO event_summaries (event_id, summary_type, content, ai_run_id, model_name, prompt_version)
+               VALUES ($1, $2, $3,
+                       (SELECT id FROM ai_runs WHERE event_id = $1 LIMIT 1),
+                       'human-edited', 'manual')
+               ON CONFLICT (event_id, summary_type)
+               DO UPDATE SET content = $3, model_name = 'human-edited',
+                             prompt_version = 'manual', created_at = now()""",
+            event_id,
+            summary_type,
+            content,
+        )
+        await conn.execute(
+            "UPDATE events SET updated_at = now() WHERE id = $1",
+            event_id,
+        )
+    return JSONResponse({"status": "ok", "summary_type": summary_type, "content": content})
 
 
 # ──────────────────────────────────────────────────────────────────────────────

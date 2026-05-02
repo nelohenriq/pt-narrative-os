@@ -15,8 +15,8 @@ import pytest
 from starlette.testclient import TestClient
 
 import os
-os.environ.setdefault("REVIEW_USERNAME", "admin")
-os.environ.setdefault("REVIEW_PASSWORD_HASH", "changeme")
+os.environ["REVIEW_USERNAME"] = "admin"
+os.environ["REVIEW_PASSWORD_HASH"] = "changeme"
 
 from review.app import app
 
@@ -150,6 +150,23 @@ class TestActions:
             )
             assert response.status_code == 401, f"{action} should require auth"
 
+    def test_summary_edit_requires_auth(self, client):
+        response = client.post(
+            "/events/00000000-0000-0000-0000-000000000000/summaries/event_summary",
+            data={"content": "test"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 401
+
+    def test_summary_edit_invalid_type(self, client):
+        response = client.post(
+            "/events/00000000-0000-0000-0000-000000000000/summaries/bad_type",
+            headers=_auth_header(),
+            data={"content": "test"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 400
+
     def test_approve_full_cycle(self, client):
         """Create event → score → approve → verify published."""
         import uuid, asyncio
@@ -214,6 +231,90 @@ class TestActions:
                 assert event["is_published"] is True
                 assert event["is_reviewed"] is True
                 assert event["reviewed_by"] == "admin"
+            finally:
+                await conn.close()
+
+        asyncio.run(_verify())
+
+    def test_summary_edit_full_cycle(self, client):
+        """Create event -> add summary -> edit summary -> verify DB update."""
+        import uuid, asyncio
+        import asyncpg
+
+        async def _setup():
+            db_url = os.getenv("DATABASE_URL", "")
+            uid = uuid.uuid4().hex[:8]
+            conn = await asyncpg.connect(db_url)
+            try:
+                outlet = await conn.fetchrow("SELECT id::text FROM outlets LIMIT 1")
+                art_id = uuid.uuid4()
+                await conn.execute(
+                    """INSERT INTO articles (
+                        id, outlet_id, canonical_url, url_hash, content_hash,
+                        title, cleaned_text, language, word_count, status, published_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pt', 20, 'embedded', now())""",
+                    art_id, outlet["id"],
+                    f"https://edit.summary.test.com/{uid}",
+                    f"h-eds-{uid}", f"ch-eds-{uid}",
+                    f"Edit summary test {uid}",
+                    f"Article body for summary edit test {uid}",
+                )
+                event_id = uuid.uuid4()
+                await conn.execute(
+                    """INSERT INTO events (id, canonical_title, first_seen_at, last_seen_at,
+                                         article_count, outlet_count, status)
+                       VALUES ($1, $2, now(), now(), 1, 1, 'unreviewed')""",
+                    event_id, f"Edit summary event {uid}",
+                )
+                await conn.execute(
+                    "INSERT INTO event_articles (event_id, article_id, relevance_score) "
+                    "VALUES ($1, $2, 0.9)",
+                    event_id, art_id,
+                )
+                # Seed an ai_run for the FK
+                run_id = uuid.uuid4()
+                await conn.execute(
+                    """INSERT INTO ai_runs (id, task_name, provider, model_name, prompt_version, event_id)
+                       VALUES ($1, 'generate_summary', 'ollama', 'mistral', 'v1_summary_fast', $2)""",
+                    run_id, event_id,
+                )
+                # Create initial summary
+                await conn.execute(
+                    """INSERT INTO event_summaries (event_id, summary_type, content, ai_run_id, model_name, prompt_version)
+                       VALUES ($1, 'event_summary', 'Original summary text', $2, 'mistral', 'v1_summary_fast')""",
+                    event_id, run_id,
+                )
+                return uid, event_id, db_url
+            finally:
+                await conn.close()
+
+        uid, event_id, db_url = asyncio.run(_setup())
+
+        # Edit the summary via POST
+        new_content = "Edited summary by reviewer"
+        response = client.post(
+            f"/events/{event_id}/summaries/event_summary",
+            headers=_auth_header(),
+            data={"content": new_content},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert data["content"] == new_content
+
+        # Verify DB reflects the edit
+        async def _verify():
+            conn = await asyncpg.connect(db_url)
+            try:
+                row = await conn.fetchrow(
+                    """SELECT content, model_name, prompt_version
+                       FROM event_summaries
+                       WHERE event_id = $1 AND summary_type = 'event_summary'""",
+                    event_id,
+                )
+                assert row["content"] == new_content
+                assert row["model_name"] == "human-edited"
+                assert row["prompt_version"] == "manual"
             finally:
                 await conn.close()
 

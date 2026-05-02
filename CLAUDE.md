@@ -22,7 +22,7 @@ This is NOT a bias-rating app. It is an evidence-first comparison tool.
 - Python 3.12
 - Postgres + pgvector (vector similarity search)
 - trafilatura (article body extraction)
-- Ollama (local models: nomic-embed-text, mistral)
+- Ollama (local models: nomic-embed-text:v1.5, qwen2.5:7b-instruct)
 - OpenAI Python SDK (used directly for all AI providers — no LiteLLM)
 - FastAPI (internal API + review UI)
 - Next.js (public frontend — separate from backend)
@@ -107,8 +107,8 @@ pt-narrative-os/
 
 | Task | Primary | Fallback |
 |---|---|---|
-| Embeddings | Ollama (nomic-embed-text) | NVIDIA NIM (nv-embedqa-e5-v5) |
-| Fast extraction | Ollama (mistral) | NVIDIA NIM (llama-3.3-70b-instruct) |
+| Embeddings | Ollama (nomic-embed-text:v1.5) | NVIDIA NIM (nv-embedqa-e5-v5) |
+| Fast extraction | Ollama (qwen2.5:7b-instruct) | NVIDIA NIM (llama-3.3-70b-instruct) |
 | Framing analysis | NVIDIA NIM (mistral-small-4-119b) | Groq (llama-3.3-70b-versatile) |
 | Summaries | NVIDIA NIM (deepseek-r1) | Groq (llama-3.3-70b-versatile) |
 | Fallback | OpenRouter (llama-3.3-70b-instruct) | — |

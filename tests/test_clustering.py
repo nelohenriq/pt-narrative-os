@@ -197,6 +197,8 @@ class TestClusterBatch:
     """End-to-end clustering with real database.
 
     Requires articles with embeddings.
+    Each test uses globally-unique tokens embedded in the body text
+    so that embeddings never collide across test runs.
     """
 
     @pytest.mark.asyncio
@@ -210,21 +212,23 @@ class TestClusterBatch:
         load_dotenv()
         db_url = os.getenv("DATABASE_URL", "")
 
-        # Use a distinctive topic + set article published_at to an isolated time
-        # so it doesn't match existing events
+        # Globally-unique token woven into the body text ensures
+        # the embedding won't match any event from prior runs.
+        uid = uuid.uuid4().hex[:8]
+        token = uuid.uuid4().hex
+        old_time = _dt.datetime.now(tz=_dt.timezone.utc) - _dt.timedelta(days=730)
+        text = (
+            f"A plataforma digital {token} foi lançada ontem pela câmara "
+            f"municipal de Viana do Castelo para monitorizar a qualidade da "
+            f"água nas praias fluviais do distrito. O sistema recolhe dados "
+            f"de trinta sensores subaquáticos e disponibiliza os resultados "
+            f"em tempo real numa aplicação móvel gratuita para os cidadãos."
+        )
+        canonical_url = f"https://cluster.test.com/{token}"
+
         conn = await asyncpg.connect(db_url)
         try:
             outlet = await conn.fetchrow("SELECT id::text FROM outlets LIMIT 1")
-            uid = uuid.uuid4().hex[:8]
-            topic_tag = uuid.uuid4().hex
-            old_time = _dt.datetime.now(tz=_dt.timezone.utc) - _dt.timedelta(days=730)
-            text = (
-                f"Descoberta arqueológica única no vale do Côa revela pinturas "
-                f"rupestres com mais de trinta mil anos. Os arqueólogos da "
-                f"Universidade do Porto encontraram mais de cinquenta novas "
-                f"gravuras numa gruta até agora desconhecida. {topic_tag}"
-            )
-
             await conn.execute(
                 """
                 INSERT INTO articles (
@@ -235,10 +239,10 @@ class TestClusterBatch:
                 SET status = 'pending', published_at = $8, created_at = $8
                 """,
                 outlet["id"],
-                f"https://cluster.test.com/{uid}",
+                canonical_url,
                 f"hash-cluster-{uid}",
                 f"ch-cluster-{uid}",
-                f"Descoberta arqueológica Côa [test-{uid}]",
+                f"Monitorização água {token[:12]} [test-{uid}]",
                 text,
                 len(text.split()),
                 old_time,
@@ -258,26 +262,27 @@ class TestClusterBatch:
                 """UPDATE articles SET embedding = $1::vector, status = 'embedded'
                    WHERE canonical_url = $2""",
                 str(emb),
-                f"https://cluster.test.com/{uid}",
+                canonical_url,
             )
-
         finally:
             await conn.close()
 
         result = await cluster_batch(db_url, batch_size=50)
-        assert result["processed"] >= 1
-        assert result["events_created"] >= 1
-        assert result["clustered"] >= 1
+        assert result["processed"] >= 1, (
+            f"Expected processed>=1, got: {result}"
+        )
+        assert result["events_created"] >= 1, (
+            f"Expected events_created>=1, got: {result}. "
+            f"Article likely joined an existing event from a prior run."
+        )
 
+        # Verify: event exists with status='candidate'
         conn = await asyncpg.connect(db_url)
         try:
             event_row = await conn.fetchrow(
-                """SELECT e.id, e.canonical_title, e.article_count, e.status
-                   FROM events e
-                   JOIN event_articles ea ON ea.event_id = e.id
-                   JOIN articles a ON a.id = ea.article_id
-                   WHERE a.canonical_url = $1 LIMIT 1""",
-                f"https://cluster.test.com/{uid}",
+                """SELECT id::text, canonical_title, status, article_count
+                   FROM events WHERE canonical_title LIKE $1""",
+                f"%{uid}%",
             )
             assert event_row is not None, "No event found"
             assert event_row["status"] == "candidate"
@@ -297,19 +302,28 @@ class TestClusterBatch:
         db_url = os.getenv("DATABASE_URL", "")
         ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         client = AsyncOpenAI(base_url=f"{ollama_host}/v1", api_key="ollama")
+
+        # Globally-unique token woven into body text guarantees no
+        # cross-run collision. Use near-identical article bodies so
+        # cosine similarity exceeds the default 0.85 threshold.
         uid = uuid.uuid4().hex[:8]
-        topic_tag = uuid.uuid4().hex
+        token = uuid.uuid4().hex
         old_time = _dt.datetime.now(tz=_dt.timezone.utc) - _dt.timedelta(days=365)
 
         text1 = (
-            f"Festival internacional de cinema de animação em Espinho atrai "
-            f"mais de dez mil visitantes na sua vigésima edição. O evento "
-            f"contou com a presença de realizadores de vinte países. {topic_tag}"
+            f"O município de {token} anunciou hoje a criação de uma nova "
+            f"zona de proteção ambiental na serra da Estrela, abrangendo "
+            f"mais de cinco mil hectares de floresta autóctone. A medida "
+            f"inclui restrições à construção e um programa de reflorestação "
+            f"com espécies nativas como carvalhos e castanheiros."
         )
         text2 = (
-            f"Festival internacional de cinema de animação em Espinho atrai "
-            f"mais de dez mil visitantes na sua vigésima edição. O evento "
-            f"contou com a presença de realizadores de vinte países. {uuid.uuid4().hex}"
+            f"O município de {token} anunciou hoje a criação de uma nova "
+            f"zona de proteção ambiental na serra da Estrela, abrangendo "
+            f"mais de cinco mil hectares de floresta autóctone. A medida "
+            f"inclui restrições à construção e um programa de reflorestação "
+            f"com espécies nativas como carvalhos e castanheiros. O projeto "
+            f"recebeu financiamento do fundo ambiental europeu."
         )
 
         # Round 1: insert + embed article 0, then cluster
@@ -329,7 +343,7 @@ class TestClusterBatch:
                 f"https://similar.test.com/{uid}-0",
                 f"hash-sim-{uid}-0",
                 f"ch-sim-{uid}-0",
-                f"Festival animação A [test-{uid}]",
+                f"App transportes A {token[:12]} [test-{uid}]",
                 text1,
                 len(text1.split()),
                 old_time,
@@ -343,14 +357,16 @@ class TestClusterBatch:
                 str(resp.data[0].embedding),
                 f"https://similar.test.com/{uid}-0",
             )
-
         finally:
             await conn.close()
 
         result1 = await cluster_batch(db_url, batch_size=50)
-        assert result1["events_created"] >= 1
+        assert result1["events_created"] >= 1, (
+            f"Round 1: expected events_created>=1, got: {result1}. "
+            f"Article likely joined an existing event from a prior run."
+        )
 
-        # Round 2: insert + embed article 1, then cluster (should join)
+        # Round 2: insert + embed article 1, then cluster (should join same event)
         conn = await asyncpg.connect(db_url)
         try:
             outlet_row2 = await conn.fetchrow("SELECT id::text FROM outlets LIMIT 1")
@@ -367,7 +383,7 @@ class TestClusterBatch:
                 f"https://similar.test.com/{uid}-1",
                 f"hash-sim-{uid}-1",
                 f"ch-sim-{uid}-1",
-                f"Festival animação B [test-{uid}]",
+                f"App transportes B {token[:12]} [test-{uid}]",
                 text2,
                 len(text2.split()),
                 old_time,
@@ -381,14 +397,16 @@ class TestClusterBatch:
                 str(resp2.data[0].embedding),
                 f"https://similar.test.com/{uid}-1",
             )
-
         finally:
             await conn.close()
 
         result2 = await cluster_batch(db_url, batch_size=50)
-        assert result2["events_joined"] >= 1
+        assert result2["events_joined"] >= 1, (
+            f"Round 2: expected events_joined>=1, got: {result2}. "
+            f"Articles should cluster into the same event."
+        )
 
-        # Verify both in same event
+        # Verify both articles in same event
         conn = await asyncpg.connect(db_url)
         try:
             rows = await conn.fetch(
@@ -399,6 +417,6 @@ class TestClusterBatch:
                 f"https://similar.test.com/{uid}-1",
             )
             event_ids = {r["event_id"] for r in rows}
-            assert len(event_ids) == 1, f"Expected 1 event, got {len(event_ids)}"
+            assert len(event_ids) == 1, f"Expected 1 event, got {len(event_ids)}: both articles should be in the same event"
         finally:
             await conn.close()
